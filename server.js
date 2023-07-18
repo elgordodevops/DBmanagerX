@@ -148,7 +148,7 @@ app.post('/api/db-offline', async (req, res) => {
 
 
 app.post('/api/db-backup', async (req, res) => {
-  const { databaseName, backupLocation } = req.body;
+  const { databaseName, BackupDestinationPath } = req.body;
 
   try {
     // Verificar si la base de datos existe y obtener su estado
@@ -181,7 +181,7 @@ app.post('/api/db-backup', async (req, res) => {
 
     // Construir la consulta de backup con los parámetros adicionales
     const backupQuery = `
-      BACKUP DATABASE [${databaseName}] TO DISK='${backupLocation}\\${backupFileName}' WITH COPY_ONLY, NOINIT
+      BACKUP DATABASE [${databaseName}] TO DISK='${BackupDestinationPath}\\${backupFileName}' WITH COPY_ONLY, NOINIT
     `;
     await pool.request().query(backupQuery);
 
@@ -201,14 +201,14 @@ const { exec } = require('child_process');
 
 // Endpoint para realizar la restauración de una base de datos
 app.post('/api/db-restore', async (req, res) => {
-  const { databaseName, backupLocation, MDFRutaDestino, LDFRutaDestino } = req.body;
+  const { databaseName, bakLocation, mdfPathDestination, ldfPathDestination } = req.body;
 
   try {
     const pool = await sql.connect(config);
 
     // Obtener la lista de archivos lógicos del respaldo
     const getFileListQuery = `
-      RESTORE FILELISTONLY FROM DISK = '${backupLocation}'
+      RESTORE FILELISTONLY FROM DISK = '${bakLocation}'
     `;
     const fileListResult = await pool.request().query(getFileListQuery);
 
@@ -231,10 +231,10 @@ app.post('/api/db-restore', async (req, res) => {
     // Construir la consulta de restauración
     const restoreQuery = `
       RESTORE DATABASE [${databaseName}]
-      FROM DISK = '${backupLocation}'
+      FROM DISK = '${bakLocation}'
       WITH
-      MOVE '${dataFile.LogicalName}' TO '${MDFRutaDestino}${databaseName}.mdf',
-      MOVE '${logFile.LogicalName}' TO '${LDFRutaDestino}${databaseName}_log.ldf',
+      MOVE '${dataFile.LogicalName}' TO '${mdfPathDestination}${databaseName}.mdf',
+      MOVE '${logFile.LogicalName}' TO '${ldfPathDestination}${databaseName}_log.ldf',
       REPLACE
     `;
     await pool.request().query(restoreQuery);
