@@ -1,0 +1,20 @@
+# Carpeta de dependencias
+node_modules/
+
+# Archivo de variables de entorno
+.env
+
+# Archivos generados en tiempo de ejecución
+dist/
+build/
+*.log
+
+# Archivos de respaldo o temporales
+*.bak
+*.swp
+*.tmp
+
+# Carpeta de cobertura de pruebas
+coverage/
+
+# Otros archivos o carpetas específicos de tu proyecto
