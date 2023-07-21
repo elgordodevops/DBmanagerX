@@ -22,7 +22,7 @@ const config = {
 };
 
 
-app.get('/api/db-list', async (res) => {
+app.get('/api/db-list', async (req, res) => {
   try {
     const pool = await sql.connect(config);
 
