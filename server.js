@@ -40,8 +40,9 @@ const LDFLocation = process.env.LDF_PATH_DESTINATION;
 const BackupDestinationPath = process.env.BACKUP_DESTINATION_PATH;
 
 
-app.get('/api/db-list', async (req, res) => {
-  const { server } = req.body;
+
+app.post('/api/db-list', async (req, res) => {
+  const { server } = req.body; // Obtener el valor de "server" desde el cuerpo de la solicitud
 
   if (!server || (server !== 'server1' && server !== 'server2')) {
     return res.status(400).json({ error: 'Debe proporcionar un valor válido para el parámetro "server" (server1 o server2)' });
@@ -166,7 +167,7 @@ app.post('/api/db-offline', async (req, res) => {
 
 app.post('/api/db-backup', async (req, res) => {
   const { server, databaseName } = req.body;
-
+  
   if (!server || (server !== 'server1' && server !== 'server2')) {
     return res.status(400).json({ error: 'Debe proporcionar un valor válido para el parámetro "server" (server1 o server2)' });
   }
@@ -205,7 +206,7 @@ app.post('/api/db-backup', async (req, res) => {
     `;
     await pool.request().query(backupQuery);
 
-    res.json({ message: 'Backup de la base de datos completado exitosamente' });
+    res.json({ message: `OK, Backupeado en ${BackupDestinationPath}\\${backupFileName}` });
   } catch (error) {
     console.error('Error al realizar el backup de la base de datos:', error);
     res.status(500).json({ error: 'Ocurrió un error al realizar el backup de la base de datos' });
@@ -217,12 +218,17 @@ app.post('/api/db-backup', async (req, res) => {
 
 
 
-app.post('/api/db-restore', async (req, res) => {
-  const { databaseName, bakfileLocation } = req.body;
 
-  if (!databaseName || !bakfileLocation) {
-    return res.status(400).json({ error: 'Debe proporcionar los parámetros "databaseName" y "bakfileLocation"' });
+// Endpoint to restore a database
+app.post('/api/db-restore', async (req, res) => {
+  const { restoreDBas, bakfileLocation, overwrite } = req.body;
+
+  if (!restoreDBas || !bakfileLocation) {
+    return res.status(400).json({ error: 'Debe proporcionar los parámetros "restoreDBas" y "bakfileLocation"' });
   }
+
+  // Convert overwrite to boolean if it's a string
+  const overwriteValue = overwrite === 'true' ? true : overwrite;
 
   try {
     const pool = await sql.connect(SQLServer1Config);
@@ -233,16 +239,31 @@ app.post('/api/db-restore', async (req, res) => {
       .query(`
         SELECT COUNT(*) AS dbCount
         FROM sys.databases
-        WHERE name = '${databaseName}'
+        WHERE name = '${restoreDBas}'
       `);
 
     const dbCount = dbExistsResult.recordset[0].dbCount;
 
-    if (dbCount > 0) {
+    if (dbCount > 0 && overwriteValue !== true) {
       return res.status(400).json({ error: 'La base de datos ya existe. La restauración no puede continuar.' });
     }
 
-    // Realizar la restauración
+    // Verificar si la base de datos está en medio de una restauración
+    const dbRestoreStatusResult = await pool
+      .request()
+      .query(`
+        SELECT COUNT(*) AS restoreCount
+        FROM sys.dm_exec_requests
+        WHERE database_id = DB_ID('${restoreDBas}') AND command = 'RESTORE DATABASE'
+      `);
+
+    const restoreCount = dbRestoreStatusResult.recordset[0].restoreCount;
+
+    if (restoreCount > 0) {
+      return res.status(400).json({ error: 'La base de datos está en medio de un proceso de restauración. La restauración no puede continuar.' });
+    }
+
+    // Restaurar la base de datos
     const getFileListQuery = `
       RESTORE FILELISTONLY FROM DISK = '${bakfileLocation}'
     `;
@@ -259,26 +280,26 @@ app.post('/api/db-restore', async (req, res) => {
       return res.status(404).json({ error: 'No se encontraron archivos lógicos válidos en el archivo de copia de seguridad' });
     }
 
-    const newDataLogicalName = `${databaseName}`;
-    const newLogLogicalName = `${databaseName}_Log`;
+    const newDataLogicalName = `${restoreDBas}`;
+    const newLogLogicalName = `${restoreDBas}_Log`;
 
     const restoreQuery = `
-      RESTORE DATABASE [${databaseName}]
+      RESTORE DATABASE [${restoreDBas}]
       FROM DISK = '${bakfileLocation}'
       WITH
-      MOVE '${dataFile.LogicalName}' TO '${MDFLocation}\\${databaseName}.mdf',
-      MOVE '${logFile.LogicalName}' TO '${LDFLocation}\\${databaseName}_log.ldf',
+      MOVE '${dataFile.LogicalName}' TO '${MDFLocation}\\${restoreDBas}.mdf',
+      MOVE '${logFile.LogicalName}' TO '${LDFLocation}\\${restoreDBas}_log.ldf',
       REPLACE
     `;
     await pool.request().query(restoreQuery);
 
     const renameDataLogicalNameQuery = `
-      ALTER DATABASE [${databaseName}] MODIFY FILE (NAME = '${dataFile.LogicalName}', NEWNAME = '${newDataLogicalName}')
+      ALTER DATABASE [${restoreDBas}] MODIFY FILE (NAME = '${dataFile.LogicalName}', NEWNAME = '${newDataLogicalName}')
     `;
     await pool.request().query(renameDataLogicalNameQuery);
 
     const renameLogLogicalNameQuery = `
-      ALTER DATABASE [${databaseName}] MODIFY FILE (NAME = '${logFile.LogicalName}', NEWNAME = '${newLogLogicalName}')
+      ALTER DATABASE [${restoreDBas}] MODIFY FILE (NAME = '${logFile.LogicalName}', NEWNAME = '${newLogLogicalName}')
     `;
     await pool.request().query(renameLogLogicalNameQuery);
 
@@ -291,6 +312,11 @@ app.post('/api/db-restore', async (req, res) => {
     sql.close();
   }
 });
+
+
+
+
+
 
 //###################################################################################################################
 
