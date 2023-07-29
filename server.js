@@ -9,6 +9,8 @@ app.use(cors());
 app.use(bodyParser.json());
 const fs = require('fs');
 app.use(express.json());
+const axios = require('axios');
+
 
 
 // Configuración de los servidores SQL
@@ -53,22 +55,37 @@ app.post('/api/db-list', async (req, res) => {
     const pool = await sql.connect(config);
 
     const result = await pool.request().query(`
-      SELECT
-        d.name AS [database_name],
-        d.create_date AS [create_date],
-        rh.restore_date AS [last_restore_date],
-        rh.user_name AS [restore_user],
-        d.state_desc AS [state]
-      FROM master.sys.databases AS d
-      LEFT JOIN msdb.dbo.restorehistory AS rh ON d.name = rh.destination_database_name
-      WHERE d.name NOT IN ('master', 'tempdb', 'model', 'msdb')
-      ORDER BY d.name ASC
+    SELECT
+    [database_name],
+    CONVERT(varchar, [create_date], 120) AS [create_date],
+    CONVERT(varchar, [last_restore_date], 120) AS [last_restore_date],
+    [restore_user],
+    [state]
+FROM
+    (
+        SELECT
+            d.name AS [database_name],
+            d.create_date AS [create_date],
+            rh.restore_date AS [last_restore_date],
+            rh.user_name AS [restore_user],
+            d.state_desc AS [state],
+            ROW_NUMBER() OVER (PARTITION BY d.name ORDER BY rh.restore_date DESC) AS [rn]
+        FROM
+            master.sys.databases AS d
+            LEFT JOIN msdb.dbo.restorehistory AS rh ON d.name = rh.destination_database_name
+        WHERE
+            d.name NOT IN ('master', 'tempdb', 'model', 'msdb')
+    ) AS subquery
+WHERE
+    [rn] = 1
+ORDER BY
+    [database_name] ASC;
     `);
 
     const databases = result.recordset.map((db) => ({
       name: db.database_name,
-      createDate: moment(db.create_date).format('YYYY-MM-DD_HH-mm'),
-      lastRestoreDate: moment(db.last_restore_date).format('YYYY-MM-DD_HH-mm'),
+      createDate: moment(db.create_date).format('YYYY-MM-DD HH:mm'),
+      lastRestoreDate: moment(db.last_restore_date).format('YYYY-MM-DD HH:mm'),
       restoreUser: db.restore_user,
       state: db.state,
     }));
@@ -166,14 +183,14 @@ app.post('/api/db-offline', async (req, res) => {
 
 
 app.post('/api/db-backup', async (req, res) => {
-  const { server, databaseName } = req.body;
+  const { sourceServer, sourceDatabaseName } = req.body;
   
-  if (!server || (server !== 'server1' && server !== 'server2')) {
-    return res.status(400).json({ error: 'Debe proporcionar un valor válido para el parámetro "server" (server1 o server2)' });
+  if (!sourceServer || (sourceServer !== 'server1' && sourceServer !== 'server2')) {
+    return res.status(400).json({ error: 'Debe proporcionar un valor válido para el parámetro "sourceServer" (server1 o server2)' });
   }
 
   try {
-    const config = server === 'server2' ? SQLServer2Config : SQLServer1Config;
+    const config = sourceServer === 'server2' ? SQLServer2Config : SQLServer1Config;
     const pool = await sql.connect(config);
 
     // Verificar si la base de datos existe y obtener su estado
@@ -182,7 +199,7 @@ app.post('/api/db-backup', async (req, res) => {
       .query(`
         SELECT state_desc
         FROM sys.databases
-        WHERE name = '${databaseName}'
+        WHERE name = '${sourceDatabaseName}'
       `);
 
     if (dbStatusResult.recordset.length === 0) {
@@ -198,11 +215,11 @@ app.post('/api/db-backup', async (req, res) => {
 
     // Generar el nombre del archivo de backup basado en la fecha actual
     const backupDate = moment().format('YYYY-MM-DD_HH-mm');
-    const backupFileName = `${databaseName}_${backupDate}.bak`;
+    const backupFileName = `${sourceDatabaseName}_${backupDate}.bak`;
 
     // Construir la consulta de backup con los parámetros adicionales
     const backupQuery = `
-      BACKUP DATABASE [${databaseName}] TO DISK='${BackupDestinationPath}\\${backupFileName}' WITH COPY_ONLY, NOINIT
+      BACKUP DATABASE [${sourceDatabaseName}] TO DISK='${BackupDestinationPath}\\${backupFileName}' WITH COPY_ONLY, NOINIT
     `;
     await pool.request().query(backupQuery);
 
@@ -217,14 +234,11 @@ app.post('/api/db-backup', async (req, res) => {
 
 
 
-
-
-// Endpoint to restore a database
 app.post('/api/db-restore', async (req, res) => {
-  const { restoreDBas, bakfileLocation, overwrite } = req.body;
+  const { destinationDatabaseName, bakfileLocation, overwrite } = req.body;
 
-  if (!restoreDBas || !bakfileLocation) {
-    return res.status(400).json({ error: 'Debe proporcionar los parámetros "restoreDBas" y "bakfileLocation"' });
+  if (!destinationDatabaseName || !bakfileLocation) {
+    return res.status(400).json({ error: 'Debe proporcionar los parámetros "destinationDatabaseName" y "bakfileLocation"' });
   }
 
   // Convert overwrite to boolean if it's a string
@@ -239,7 +253,7 @@ app.post('/api/db-restore', async (req, res) => {
       .query(`
         SELECT COUNT(*) AS dbCount
         FROM sys.databases
-        WHERE name = '${restoreDBas}'
+        WHERE name = '${destinationDatabaseName}'
       `);
 
     const dbCount = dbExistsResult.recordset[0].dbCount;
@@ -254,7 +268,7 @@ app.post('/api/db-restore', async (req, res) => {
       .query(`
         SELECT COUNT(*) AS restoreCount
         FROM sys.dm_exec_requests
-        WHERE database_id = DB_ID('${restoreDBas}') AND command = 'RESTORE DATABASE'
+        WHERE database_id = DB_ID('${destinationDatabaseName}') AND command = 'RESTORE DATABASE'
       `);
 
     const restoreCount = dbRestoreStatusResult.recordset[0].restoreCount;
@@ -280,26 +294,27 @@ app.post('/api/db-restore', async (req, res) => {
       return res.status(404).json({ error: 'No se encontraron archivos lógicos válidos en el archivo de copia de seguridad' });
     }
 
-    const newDataLogicalName = `${restoreDBas}`;
-    const newLogLogicalName = `${restoreDBas}_Log`;
+    const newDataLogicalName = `${destinationDatabaseName}`;
+    const newLogLogicalName = `${destinationDatabaseName}_Log`;
 
     const restoreQuery = `
-      RESTORE DATABASE [${restoreDBas}]
+      RESTORE DATABASE [${destinationDatabaseName}]
       FROM DISK = '${bakfileLocation}'
       WITH
-      MOVE '${dataFile.LogicalName}' TO '${MDFLocation}\\${restoreDBas}.mdf',
-      MOVE '${logFile.LogicalName}' TO '${LDFLocation}\\${restoreDBas}_log.ldf',
-      REPLACE
+      MOVE '${dataFile.LogicalName}' TO '${MDFLocation}\\${destinationDatabaseName}.mdf',
+      MOVE '${logFile.LogicalName}' TO '${LDFLocation}\\${destinationDatabaseName}_log.ldf',
+      REPLACE,
+      RECOVERY
     `;
     await pool.request().query(restoreQuery);
 
     const renameDataLogicalNameQuery = `
-      ALTER DATABASE [${restoreDBas}] MODIFY FILE (NAME = '${dataFile.LogicalName}', NEWNAME = '${newDataLogicalName}')
+      ALTER DATABASE [${destinationDatabaseName}] MODIFY FILE (NAME = '${dataFile.LogicalName}', NEWNAME = '${newDataLogicalName}')
     `;
     await pool.request().query(renameDataLogicalNameQuery);
 
     const renameLogLogicalNameQuery = `
-      ALTER DATABASE [${restoreDBas}] MODIFY FILE (NAME = '${logFile.LogicalName}', NEWNAME = '${newLogLogicalName}')
+      ALTER DATABASE [${destinationDatabaseName}] MODIFY FILE (NAME = '${logFile.LogicalName}', NEWNAME = '${newLogLogicalName}')
     `;
     await pool.request().query(renameLogLogicalNameQuery);
 
@@ -312,107 +327,6 @@ app.post('/api/db-restore', async (req, res) => {
     sql.close();
   }
 });
-
-
-
-
-
-
-//###################################################################################################################
-
-
-
-
-
-
-
-const getServerConfig = (server) => {
-  return server === 'server2' ? SQLServer2Config : SQLServer1Config;
-};
-
-app.post('/api/db-backuprestore', async (req, res) => {
-  const {
-    sourceServer,
-    destinationServer,
-    sourceDatabaseName,
-    destinationDatabaseName,
-  } = req.body;
-
-  try {
-    const sourceConfig = getServerConfig(sourceServer);
-    const destinationConfig = getServerConfig(destinationServer);
-
-    const sourcePool = await sql.connect(sourceConfig);
-    const destinationPool = await sql.connect(destinationConfig);
-
-    // Perform the backup on the source server
-    const backupDate = moment().format('YYYY-MM-DD_HH-mm');
-    const backupFileName = `${sourceDatabaseName}_${backupDate}.bak`;
-    const backupQuery = `
-      BACKUP DATABASE [${sourceDatabaseName}] TO DISK='${BackupDestinationPath}\\${backupFileName}' WITH COPY_ONLY, NOINIT
-    `;
-    await sourcePool.request().query(backupQuery);
-
-    // Perform the restore on the destination server
-    const getFileListQuery = `
-      RESTORE FILELISTONLY FROM DISK = '${BackupDestinationPath}\\${backupFileName}'
-    `;
-    const fileListResult = await sourcePool.request().query(getFileListQuery);
-
-    if (fileListResult.recordset.length === 0) {
-      res.status(404).json({ error: 'El archivo de copia de seguridad no existe en la ubicación proporcionada' });
-      return;
-    }
-
-    const dataFile = fileListResult.recordset.find((file) => file.Type === 'D');
-    const logFile = fileListResult.recordset.find((file) => file.Type === 'L');
-
-    if (!dataFile || !logFile) {
-      res.status(404).json({ error: 'No valid logical files found in the backup file' });
-      return;
-    }
-
-    const newDataLogicalName = `${destinationDatabaseName}`;
-    const newLogLogicalName = `${destinationDatabaseName}_Log`;
-
-    const restoreQuery = `
-      RESTORE DATABASE [${destinationDatabaseName}]
-      FROM DISK = '${BackupDestinationPath}\\${backupFileName}'
-      WITH
-      MOVE '${dataFile.LogicalName}' TO '${MDFLocation}\\${destinationDatabaseName}.mdf',
-      MOVE '${logFile.LogicalName}' TO '${LDFLocation}\\${destinationDatabaseName}_log.ldf',
-      REPLACE
-    `;
-    await destinationPool.request().query(restoreQuery);
-
-    const renameDataLogicalNameQuery = `
-      ALTER DATABASE [${destinationDatabaseName}] MODIFY FILE (NAME = '${dataFile.LogicalName}', NEWNAME = '${newDataLogicalName}')
-    `;
-    await destinationPool.request().query(renameDataLogicalNameQuery);
-
-    const renameLogLogicalNameQuery = `
-      ALTER DATABASE [${destinationDatabaseName}] MODIFY FILE (NAME = '${logFile.LogicalName}', NEWNAME = '${newLogLogicalName}')
-    `;
-    await destinationPool.request().query(renameLogLogicalNameQuery);
-
-    console.log('Backup and restore of the database completed successfully');
-    res.json({ message: 'Backup and restore of the database completed successfully' });
-  } catch (error) {
-    console.error('Error performing backup and restore of the database:', error);
-    res.status(500).json({ error: 'An error occurred while performing backup and restore of the database' });
-  } finally {
-    sql.close();
-  }
-});
-
-
-
-
-
-
-
-
-
 
 
 
