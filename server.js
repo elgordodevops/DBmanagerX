@@ -104,7 +104,7 @@ app.post('/api/db-online', async (req, res) => {
   const { databaseName } = req.body;
 
   try {
-    const pool = await sql.connect(SQLServer1Config);
+    const pool = await sql.connect(SQLServer2Config);
 
     // Verificar si la base de datos existe y obtener su estado
     const checkQuery = `
@@ -145,7 +145,7 @@ app.post('/api/db-offline', async (req, res) => {
   const { databaseName } = req.body;
 
   try {
-    const pool = await sql.connect(SQLServer1Config);
+    const pool = await sql.connect(SQLServer2Config);
 
     // Verificar si la base de datos existe y obtener su estado
     const checkQuery = `
@@ -223,14 +223,18 @@ app.post('/api/db-backup', async (req, res) => {
     `;
     await pool.request().query(backupQuery);
 
-    res.json({ message: `OK, Backupeado en ${BackupDestinationPath}\\${backupFileName}` });
+    console.log('Backup de la base de datos completado exitosamente');
+    // Enviar la respuesta con el nombre del archivo de copia de seguridad
+    res.json({ message: `OK, Backupeado en ${BackupDestinationPath}\\${backupFileName}`, backupFileName });
   } catch (error) {
-    console.error('Error al realizar el backup de la base de datos:', error);
+    console.error('Error al realizar el backup de la base de datos:', error.message);
     res.status(500).json({ error: 'Ocurrió un error al realizar el backup de la base de datos' });
   } finally {
     sql.close();
   }
 });
+
+
 
 
 
@@ -243,9 +247,20 @@ app.post('/api/db-restore', async (req, res) => {
 
   // Convert overwrite to boolean if it's a string
   const overwriteValue = overwrite === 'true' ? true : overwrite;
-
   try {
-    const pool = await sql.connect(SQLServer1Config);
+    const pool = await sql.connect(SQLServer2Config); // Conexión siempre a SQLServer2Config
+    
+//Permite recibir server1 o server2  
+//  try {
+//    let pool;
+//
+//    if (destinationServer === 'server1') {
+//      pool = await sql.connect(SQLServer1Config);
+//    } else if (destinationServer === 'server2') {
+//      pool = await sql.connect(SQLServer2Config);
+//    } else {
+//      return res.status(400).json({ error: 'El valor del parámetro "destinationServer" debe ser "server1" o "server2"' });
+//    }
 
     // Verificar si la base de datos existe
     const dbExistsResult = await pool
@@ -257,11 +272,9 @@ app.post('/api/db-restore', async (req, res) => {
       `);
 
     const dbCount = dbExistsResult.recordset[0].dbCount;
-
     if (dbCount > 0 && overwriteValue !== true) {
       return res.status(400).json({ error: 'La base de datos ya existe. La restauración no puede continuar.' });
     }
-
     // Verificar si la base de datos está en medio de una restauración
     const dbRestoreStatusResult = await pool
       .request()
@@ -275,6 +288,29 @@ app.post('/api/db-restore', async (req, res) => {
 
     if (restoreCount > 0) {
       return res.status(400).json({ error: 'La base de datos está en medio de un proceso de restauración. La restauración no puede continuar.' });
+    }
+
+    // Convertir la fecha y hora actual a un formato legible sin segundos
+    const currentDate = new Date();
+    const formattedDate = currentDate.toLocaleString('es-ES', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit'
+    }).replace(/[/,:]+/g, '_'); // Reemplazar caracteres no válidos para el nombre del archivo
+
+    // Nombre del archivo de respaldo con fecha y hora
+    const backupFileName = `${destinationDatabaseName}_Backup_${formattedDate}.bak`;
+
+    // Realizar un backup si la base de datos existe y se especificó sobrescribir
+    if (dbCount > 0 && overwriteValue === true) {
+      const backupQuery = `
+        BACKUP DATABASE [${destinationDatabaseName}]
+        TO DISK = '${BackupDestinationPath}\\${backupFileName}'
+        WITH FORMAT, INIT, SKIP
+      `;
+      await pool.request().query(backupQuery);
     }
 
     // Restaurar la base de datos
@@ -302,7 +338,7 @@ app.post('/api/db-restore', async (req, res) => {
       FROM DISK = '${bakfileLocation}'
       WITH
       MOVE '${dataFile.LogicalName}' TO '${MDFLocation}\\${destinationDatabaseName}.mdf',
-      MOVE '${logFile.LogicalName}' TO '${LDFLocation}\\${destinationDatabaseName}_log.ldf',
+      MOVE '${logFile.LogicalName}'  TO '${LDFLocation}\\${destinationDatabaseName}_log.ldf',
       REPLACE,
       RECOVERY
     `;
@@ -327,6 +363,63 @@ app.post('/api/db-restore', async (req, res) => {
     sql.close();
   }
 });
+
+
+
+
+//###################################################################################################################
+
+
+
+
+// Endpoint para realizar backup y restauración de una base de datos
+app.post('/api/db-backup-restore', async (req, res) => {
+  // Obtener los datos del cuerpo de la solicitud
+  const { sourceServer, sourceDatabaseName, destinationDatabaseName, overwrite } = req.body;
+
+  try {
+    console.log('Realizando el backup de la base de datos...');
+    const backupResult = await axios.post('http://localhost:3000/api/db-backup', {
+      sourceServer,
+      sourceDatabaseName
+    });
+
+    // Obtener el nombre del archivo de copia de seguridad generado en el endpoint db-backup
+    const backupFileName = backupResult.data.backupFileName;
+
+    // Si el backup se realizó correctamente, proceder con la restauración
+    if (backupFileName) {
+      console.log('Backup completado. Realizando la restauración de la base de datos...');
+      const restoreResult = await axios.post('http://localhost:3000/api/db-restore', {
+        destinationDatabaseName,
+        bakfileLocation: `${BackupDestinationPath}\\${backupFileName}`, // Utilizar el nombre de archivo generado para la restauración
+        overwrite
+      });
+
+      // Si la restauración también se realizó correctamente, enviar una respuesta exitosa
+      if (restoreResult.data.message) {
+        console.log('Restauración completada exitosamente.');
+        return res.json({ message: 'Backup y restauración de la base de datos completados exitosamente' });
+      }
+    }
+
+    // Si el backup o la restauración fallaron, enviar una respuesta con error
+    console.log('Error al realizar el backup y restauración de la base de datos.');
+    res.status(500).json({ error: 'Ocurrió un error al realizar el backup y restauración de la base de datos' });
+  } catch (error) {
+    console.error('Error al realizar el backup y restauración de la base de datos:', error);
+    res.status(500).json({ error: 'Ocurrió un error al realizar el backup y restauración de la base de datos' });
+  }
+});
+
+
+
+
+
+
+
+
+
 
 
 
