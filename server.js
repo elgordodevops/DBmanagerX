@@ -59,7 +59,6 @@ app.post('/api/db-list', async (req, res) => {
     [database_name],
     CONVERT(varchar, [create_date], 120) AS [create_date],
     CONVERT(varchar, [last_restore_date], 120) AS [last_restore_date],
-    [restore_user],
     [state]
 FROM
     (
@@ -67,7 +66,6 @@ FROM
             d.name AS [database_name],
             d.create_date AS [create_date],
             rh.restore_date AS [last_restore_date],
-            rh.user_name AS [restore_user],
             d.state_desc AS [state],
             ROW_NUMBER() OVER (PARTITION BY d.name ORDER BY rh.restore_date DESC) AS [rn]
         FROM
@@ -235,9 +233,6 @@ app.post('/api/db-backup', async (req, res) => {
 });
 
 
-
-
-
 app.post('/api/db-restore', async (req, res) => {
   const { destinationDatabaseName, bakfileLocation, overwrite } = req.body;
 
@@ -365,14 +360,6 @@ app.post('/api/db-restore', async (req, res) => {
 });
 
 
-
-
-//###################################################################################################################
-
-
-
-
-// Endpoint para realizar backup y restauración de una base de datos
 app.post('/api/db-backup-restore', async (req, res) => {
   // Obtener los datos del cuerpo de la solicitud
   const { sourceServer, sourceDatabaseName, destinationDatabaseName, overwrite } = req.body;
@@ -411,14 +398,6 @@ app.post('/api/db-backup-restore', async (req, res) => {
     res.status(500).json({ error: 'Ocurrió un error al realizar el backup y restauración de la base de datos' });
   }
 });
-
-
-
-
-
-
-
-
 
 
 
