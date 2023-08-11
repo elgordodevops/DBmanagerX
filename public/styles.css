@@ -1,0 +1,68 @@
+/* Dark and modern custom styles */
+
+/* Body background and text color */
+body {
+  background-color: #121212;
+  color: #ffffff;
+}
+
+/* Container background */
+.container {
+  background-color: #1e1e1e;
+  padding: 20px;
+  border-radius: 10px;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+}
+
+/* Table styles */
+.table {
+  background-color: #212121;
+  color: #ffffff; /* Text color for all rows */
+}
+
+/* Input search box styles */
+.form-control {
+  background-color: #333333;
+  color: #ffffff;
+}
+
+/* Primary button styles */
+.btn-primary {
+  background-color: #007bff;
+  border-color: #007bff;
+}
+
+.btn-primary:hover {
+  background-color: #0056b3;
+  border-color: #0056b3;
+}
+
+/* SweetAlert styles */
+.swal2-popup {
+  background-color: #1e1e1e;
+  color: #ffffff;
+}
+
+.swal2-title {
+  color: #ffffff;
+}
+
+.swal2-content {
+  color: #ffffff;
+}
+
+.swal2-confirm {
+  background-color: #007bff;
+}
+
+.swal2-cancel {
+  background-color: #6c757d;
+}
+
+.swal2-confirm:hover {
+  background-color: #0056b3;
+}
+
+.swal2-cancel:hover {
+  background-color: #545b62;
+}

@@ -400,7 +400,13 @@ app.post('/api/db-backup-restore', async (req, res) => {
 });
 
 
+// Middleware para servir archivos estáticos (HTML, CSS, JS, imágenes, etc.)
+app.use(express.static(path.join(__dirname, 'public')));
 
+// Ruta para servir tu index.html en la ruta principal
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
