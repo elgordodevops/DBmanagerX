@@ -22,6 +22,8 @@ const SQLServer1Config = {
   options: {
     encrypt: true,
     trustServerCertificate: true,
+    requestTimeout: 0, // Set the timeout value in milliseconds
+
   },
 };
 
@@ -33,6 +35,8 @@ const SQLServer2Config = {
   options: {
     encrypt: true,
     trustServerCertificate: true,
+    requestTimeout: 0, // Set the timeout value in milliseconds
+
   },
 };
 
@@ -400,6 +404,7 @@ app.post('/api/db-backup-restore', async (req, res) => {
 });
 
 
+const path = require('path');
 // Middleware para servir archivos estáticos (HTML, CSS, JS, imágenes, etc.)
 app.use(express.static(path.join(__dirname, 'public')));
 
